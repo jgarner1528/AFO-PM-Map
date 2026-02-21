@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>AFO County PM Map (True Hover)</title>
+  <title>AFO County PM Map (True Hover + Click Popup)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" />
@@ -11,6 +11,7 @@
   <style>
     html, body, #viewDiv { height: 100%; width: 100%; margin: 0; padding: 0; }
 
+    /* Hover card */
     #hoverCard {
       position: absolute;
       background: #fff;
@@ -28,8 +29,10 @@
     #hoverCard .pmName { font-weight: 700; font-size: 14px; margin-bottom: 2px; }
     #hoverCard .pmLine { margin: 1px 0; }
 
+    /* Popup hyperlinks */
     .popup-email a { text-decoration: underline; }
 
+    /* Simple control panel */
     #controls {
       background: rgba(255,255,255,0.92);
       padding: 10px;
@@ -38,17 +41,8 @@
       font-family: Arial, sans-serif;
       width: 230px;
     }
-    #controls .title {
-      font-weight: 700;
-      margin-bottom: 8px;
-      font-size: 13px;
-    }
-    #controls .row {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 8px;
-      flex-wrap: wrap;
-    }
+    #controls .title { font-weight: 700; margin-bottom: 8px; font-size: 13px; }
+    #controls .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
     #controls button {
       border: 1px solid #cfcfcf;
       background: #fff;
@@ -59,12 +53,7 @@
       width: 100%;
     }
     #controls button:hover { background: #f3f3f3; }
-    #controls .small {
-      font-size: 11px;
-      opacity: 0.8;
-      margin-top: 2px;
-      line-height: 1.25;
-    }
+    #controls .small { font-size: 11px; opacity: 0.8; margin-top: 2px; line-height: 1.25; }
   </style>
 </head>
 
@@ -124,9 +113,9 @@ require([
   // Hover colors: Red = Joey, Green = Brooke, Blue = Josh
   // ---------------------------------------------------------------------------
   const PM = {
-    BROOKE: { name: "Brooke Davis", phone: "(828) 271-7980 ext 4232", email: "Brooke.A.Davis@usace.army.mil" },
-    JOEY:   { name: "Joey Winston", phone: "(828) 271-7980 ext 4233", email: "Joseph.B.Winston@usace.army.mil" },
-    JOSH:   { name: "Josh Garner",  phone: "(828) 271-7980 ext 4231", email: "Joshua.G.Garner@usace.army.mil" }
+    BROOKE: { name: "Brooke Davis", title: "Regulatory Specialist", phone: "(828) 271-7980 ext 4232", email: "Brooke.A.Davis@usace.army.mil" },
+    JOEY:   { name: "Joey Winston",  title: "Regulatory Specialist", phone: "(828) 271-7980 ext 4233", email: "Joseph.B.Winston@usace.army.mil" },
+    JOSH:   { name: "Josh Garner",   title: "Regulatory Specialist", phone: "(828) 271-7980 ext 4231", email: "Joshua.G.Garner@usace.army.mil" }
   };
 
   const brookeCounties = new Set([
@@ -187,22 +176,24 @@ require([
     ]
   });
 
-  // County boundaries and outline (white, not black)
+  // Counties (white outline)
   const countiesLayer = new FeatureLayer({
     url: COUNTY_POLY_LAYER_URL,
     outFields: ["*"],
-    definitionExpression: `UPPER(NAME) IN (${sqlStringList(subsetCounties.map(c => c.toUpperCase()))})`
+    definitionExpression: `UPPER(NAME) IN (${sqlStringList(subsetCounties.map(c => c.toUpperCase()))})`,
+    popupEnabled: false   // we handle click popups ourselves so they stay open and are consistent
   });
   countiesLayer.renderer = new SimpleRenderer({
     symbol: new SimpleFillSymbol({
       style: "solid",
-      // a touch of fill so counties are selectable and visible over hybrid
       color: [255, 255, 255, 0.03],
       outline: { color: [255, 255, 255, 0.90], width: 1.5 }
     })
   });
 
+  // Hover overlay + Click selection overlay + Office graphics
   const hoverGraphics = new GraphicsLayer();
+  const selectGraphics = new GraphicsLayer();
   const officeGraphics = new GraphicsLayer();
 
   // ---------------------------------------------------------------------------
@@ -210,7 +201,7 @@ require([
   // ---------------------------------------------------------------------------
   const map = new Map({
     basemap: "hybrid",
-    layers: [ncStateLayer, roadsLayer, countiesLayer, hoverGraphics, officeGraphics]
+    layers: [ncStateLayer, roadsLayer, countiesLayer, hoverGraphics, selectGraphics, officeGraphics]
   });
 
   const view = new MapView({
@@ -221,8 +212,7 @@ require([
   });
 
   // Search bar (address search)
-  const searchWidget = new Search({ view: view, includeDefaultSources: true });
-  view.ui.add(searchWidget, "top-right");
+  view.ui.add(new Search({ view, includeDefaultSources: true }), "top-right");
 
   // ---------------------------------------------------------------------------
   // Default opening extent + Last-view persistence
@@ -236,7 +226,6 @@ require([
       spatialReference: ext.spatialReference ? ext.spatialReference.toJSON() : { wkid: 3857 }
     };
   }
-
   function jsonToExtent(obj) {
     try {
       if (!obj) return null;
@@ -244,56 +233,32 @@ require([
         xmin: obj.xmin, ymin: obj.ymin, xmax: obj.xmax, ymax: obj.ymax,
         spatialReference: obj.spatialReference || { wkid: 3857 }
       });
-    } catch (_) {
-      return null;
-    }
+    } catch (_) { return null; }
   }
-
   function saveLastExtent() {
     if (!view.extent) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(extentToJSON(view.extent)));
-    } catch (_) {}
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(extentToJSON(view.extent))); } catch (_) {}
   }
-
   function loadLastExtent() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
       return jsonToExtent(JSON.parse(raw));
-    } catch (_) {
-      return null;
-    }
+    } catch (_) { return null; }
   }
-
   async function goDefaultView() {
-    if (defaultExtent) {
-      await view.goTo(defaultExtent);
-    }
+    if (defaultExtent) await view.goTo(defaultExtent);
   }
 
-  // Build default extent from subset and apply initial view
   countiesLayer.when(async () => {
     const last = loadLastExtent();
-
     const result = await countiesLayer.queryExtent();
-    if (result && result.extent) {
-      // Slightly more zoomed in than 1.05, but still shows everything comfortably
-      defaultExtent = result.extent.expand(1.02);
-    }
-
-    if (last) {
-      await view.goTo(last);
-    } else {
-      await goDefaultView();
-    }
+    if (result && result.extent) defaultExtent = result.extent.expand(1.02); // zoomed in a bit, not too much
+    if (last) await view.goTo(last);
+    else await goDefaultView();
   });
 
-  // Save last-view extent whenever user stops moving
-  reactiveUtils.when(
-    () => view.stationary === true,
-    () => saveLastExtent()
-  );
+  reactiveUtils.when(() => view.stationary === true, () => saveLastExtent());
 
   // ---------------------------------------------------------------------------
   // Control panel UI: Reset to Default View
@@ -318,7 +283,7 @@ require([
   });
 
   // ---------------------------------------------------------------------------
-  // Asheville Regulatory Field Office marker (single symbol)
+  // Office marker (single symbol) + popup
   // ---------------------------------------------------------------------------
   const logoSymbol = new PictureMarkerSymbol({
     url: USACE_LOGO_URL,
@@ -387,10 +352,8 @@ require([
       `
     }
   });
-
   officeGraphics.add(afoGraphic);
 
-  // Geocode AFO address and move the pin to the exact location
   view.when(() => {
     locator.addressToLocations(GEOCODER_URL, {
       address: { SingleLine: AFO_ADDRESS },
@@ -404,9 +367,10 @@ require([
   });
 
   // ---------------------------------------------------------------------------
-  // TRUE HOVER: PM contact card + PM-colored hover overlay
+  // Hover + Click selection logic
   // ---------------------------------------------------------------------------
   const hoverCard = document.getElementById("hoverCard");
+  let selectedCountyKey = null; // keep track of selection so it stays highlighted
 
   function normalizeCountyName(name) {
     return (name || "").trim();
@@ -415,10 +379,9 @@ require([
   function assignPM(countyName) {
     if (!countyName) return null;
     const cn = countyName === "Surrey" ? "Surry" : countyName;
-
     if (brookeCounties.has(cn)) return PM.BROOKE;
-    if (joeyCounties.has(cn))   return PM.JOEY;
-    if (joshCounties.has(cn))   return PM.JOSH;
+    if (joeyCounties.has(cn)) return PM.JOEY;
+    if (joshCounties.has(cn)) return PM.JOSH;
     return null;
   }
 
@@ -426,15 +389,60 @@ require([
     hoverGraphics.removeAll();
     const rgba = HOVER_COLORS[pmName] || [255, 255, 0, 0.20];
 
+    // Keep hover visible but not overpower the click selection
     const symbol = new SimpleFillSymbol({
       style: "solid",
       color: rgba,
-      outline: { color: [255, 255, 255, 0.95], width: 2.0 }
+      outline: { color: [255, 255, 255, 0.85], width: 1.5 }
     });
-
     hoverGraphics.add(new Graphic({ geometry, symbol }));
   }
 
+  function setSelectionOverlay(geometry) {
+    selectGraphics.removeAll();
+
+    // Strong outline for "clicked" selection, no fill so it reads cleanly over imagery
+    const symbol = new SimpleFillSymbol({
+      style: "solid",
+      color: [0, 0, 0, 0.00],
+      outline: { color: [255, 255, 255, 1.0], width: 3.0 }
+    });
+
+    selectGraphics.add(new Graphic({ geometry, symbol }));
+  }
+
+  function clearSelection() {
+    selectedCountyKey = null;
+    selectGraphics.removeAll();
+    view.popup.close();
+  }
+
+  function buildCountyPopupHTML(countyName, pm) {
+    if (!pm) {
+      return `
+        <div class="popup-email" style="line-height:1.4;">
+          <div><strong>County:</strong> ${countyName}</div>
+          <div style="margin-top:6px;">PM assignment not found in the current roster.</div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="popup-email" style="line-height:1.4;">
+        <div><strong>County:</strong> ${countyName}</div>
+        <hr style="margin:10px 0;">
+        <div><strong>Project Manager</strong></div>
+        <div style="margin-top:6px;"><strong>${pm.name}</strong></div>
+        <div>${pm.title}</div>
+        <div style="margin-top:6px;">
+          <a href="mailto:${pm.email}">${pm.email}</a>
+        </div>
+        <div style="margin-top:4px;">${pm.phone}</div>
+      </div>
+    `;
+  }
+
+  // Hover behavior (still works even when a county is selected)
   view.on("pointer-leave", () => {
     hoverCard.style.display = "none";
     hoverGraphics.removeAll();
@@ -471,9 +479,37 @@ require([
       hoverCard.innerHTML = `
         <div class="pmName">${pm.name}</div>
         <div class="pmLine">${pm.phone}</div>
-        <div class="pmLine"><a href="mailto:${pm.email}">${pm.email}</a></div>
+        <div class="pmLine">${pm.email}</div>
         <div class="pmLine" style="margin-top:6px;"><strong>County:</strong> ${countyName}</div>
       `;
+    });
+  });
+
+  // Click behavior: select + keep popup open for clickable email
+  view.on("click", (event) => {
+    view.hitTest(event).then((response) => {
+      const countyHit = response.results.find(r => r.graphic && r.graphic.layer === countiesLayer);
+
+      // If user clicks elsewhere, leave the existing popup unless they clicked empty space:
+      // If they click empty space, close and clear selection.
+      if (!countyHit) {
+        clearSelection();
+        return;
+      }
+
+      const g = countyHit.graphic;
+      const countyName = normalizeCountyName(g.attributes.NAME);
+      const pm = assignPM(countyName);
+
+      selectedCountyKey = (countyName || "").toUpperCase();
+
+      setSelectionOverlay(g.geometry);
+
+      view.popup.open({
+        title: countyName ? `${countyName} County` : "County",
+        content: buildCountyPopupHTML(countyName || "County", pm),
+        location: event.mapPoint
+      });
     });
   });
 
